@@ -1,0 +1,826 @@
+<HTML lang="en">
+	<HEAD>
+		<META CHARSET="UTF-8">
+		<TITLE>Lighting</TITLE>	
+
+<script id="2dVertexShader" type="notjs">
+	attribute vec4 a_position;	
+	attribute vec3 a_color;
+	varying vec3 v_color;
+	
+	//This is added to place the object
+	uniform vec3 u_translation;
+	uniform vec3 u_rotation;	
+	uniform vec3 u_scale;
+	
+	vec4 PositionObject(vec4 pos)
+	{
+		mat4 translateM = mat4(1.0,0.0,0.0,0.0,
+					0.0,1.0,0.0,0.0,
+					0.0,0.0,1.0,0.0,
+					u_translation.x,u_translation.y,u_translation.z,1.0);
+		return translateM*pos;	
+	}
+	
+	vec4 ScaleObject(vec4 pos)
+	{
+		if(length(u_scale) != 0.0)
+		{
+		mat4 scaleM = mat4(
+						u_scale.x,0.0,0.0,0.0,
+						0.0,u_scale.y,0.0,0.0,
+						0.0,0.0,u_scale.z,0.0,
+						0.0,0.0,0.0,1.0
+						);
+			return scaleM * pos;
+		}
+		else
+		{
+			return pos;
+		}
+	}
+	
+	vec4 RotateObject(vec4 pos)
+	{
+		vec3 c = cos(u_rotation);
+		vec3 s = sin(u_rotation);
+		mat4 rotateX = mat4(
+							1.0,	0.0,		0.0,		0.0,
+							0.0,	c.x,		s.x,		0.0,
+							0.0,	-1.0*s.x, 	c.x,		0.0,
+							0.0,	0.0,		0.0,		1.0
+							);
+		mat4 rotateY = mat4(c.y,0.0,-1.0*s.y,0.0,
+							0.0,1.0,0.0,0.0,
+							s.y,0.0,c.y,0.0,
+							0.0,0.0,0.0,1.0);
+		mat4 rotateZ = mat4(
+							c.z,		s.z,		0.0,	0.0,
+							-1.0*s.z, 	c.z,		0.0,	0.0,
+							0.0,		0.0,		1.0,	0.0,
+							0.0,		0.0,		0.0,	1.0
+							);					
+		return rotateX* rotateY*rotateZ*pos;
+	}
+	
+	//This was added for camera move
+	uniform vec3 cameraLoc;
+	uniform vec3 cameraRotation;
+	uniform float n;
+	uniform float f;
+	uniform float r;
+	uniform float t;
+			
+	vec4 MoveCamera(vec4 pos)
+	{
+	vec3 cw = cos(cameraRotation);
+	vec3 sw = sin(cameraRotation);
+	
+	mat4 translateView = mat4(
+				1.0,0.0,0.0,0.0,
+				0.0,1.0,0.0,0.0,
+				0.0,0.0,-1.0,0.0,	//invert z-scale to make 'forward' actually forward
+				-1.0*cameraLoc.x,-1.0*cameraLoc.y,cameraLoc.z,1.0
+				);
+				
+	mat4 rotateYView = mat4(
+				cw.y,0.0,-1.0*sw.y,0.0,
+				0.0,1.0,0.0,0.0,
+				sw.y,0.0,cw.y,0.0,
+				0.0,0.0,0.0,1.0
+				);
+							
+	mat4 rotateXView = mat4(
+				1.0,	0.0,		0.0,	0.0,
+				0.0,	cw.x,		sw.x,	0.0,
+				0.0,	-1.0*sw.x, 	cw.x,	0.0,
+				0.0,	0.0,		0.0,	1.0
+						);
+	
+	mat4 rotateZView = mat4(
+				cw.z,		sw.z,		0.0,	0.0,
+				-1.0*sw.z, 	cw.z,		0.0,	0.0,
+				0.0,		0.0,		1.0,	0.0,
+				0.0,		0.0,		0.0,	1.0
+						);		
+	return rotateXView*rotateYView*rotateZView*translateView*pos;
+	}
+	
+	vec4 ApplyProjection(vec4 pos)
+	{
+	
+		mat4 ComplexPerspective = mat4(
+						n/r, 0.0,0.0,0.0,
+						0.0, n/t,0.0,0.0,
+						0.0,0.0,-1.0*(f+n)/(f-n),-1.0,
+						0.0,0.0,-2.0*f*n/(f-n),0.0
+						);
+									
+		mat4 ComplexOrtho = mat4(	
+					1.0/r,0.0,0.0,0.0,
+					0.0,1.0/t,0.0,0.0,	
+					0.0,0.0,1.0,0.0,
+					0.0,0.0,0.0,1.0	
+					);
+						
+		//Choose which projection you want here:  Perspective or Orthographic			
+		return ComplexPerspective*pos;
+	}
+			
+	
+	//End of Camera Move
+	
+	
+	vec4 LookAt(vec3 F, vec3 U, vec4 pos)
+	{
+		//precision mediump float;
+		vec3 R = cross(F,U);
+		mat4 LookAt = mat4(R.x,R.y,R.z,0.0,
+							U.x,U.y,U.z,0.0,
+							F.x,F.y,F.z,0.0,
+							0.0,0.0,0.0,1.0);
+				
+		return LookAt*pos;	
+	}
+	
+	//Lighting
+	varying vec3 fakenormal;
+	varying vec3 v_surfaceToLight;	//going to need one of these for each light in the assignment
+	varying vec3 v_surfaceToView;
+	varying vec3 v_spot_surfaceToLight;
+	
+	void main()
+	{
+		//Lighting start
+		if(length(a_position)<5.0)
+		{
+			//fakenormal = vec3(a_position);
+			fakenormal = RotateObject(a_position).xyz;
+		}
+		else
+		{
+			fakenormal = vec3(0.0,1.0,0.0);
+		}
+		vec4 worldSpace = PositionObject(RotateObject(a_position));
+		
+		v_surfaceToLight = vec3(0.0,1.0,-5.0) - worldSpace.xyz;	//light pos
+		//v_surfaceToView = worldLoc - worldSpace.xyz;	//for specularity
+		v_spot_surfaceToLight = vec3(5.0, 0.0, -2.0) - worldSpace.xyz;
+		v_color = a_color;
+		vec4 cameraSpace = MoveCamera(worldSpace);
+		
+		//Lighting end
+		//Now the final gl_Position will be the world space coordinates.
+		gl_Position=ApplyProjection(cameraSpace);
+	}		
+	</SCRIPT>
+	
+<script id="2dFragmentShader" type="notjs">
+	precision mediump float;
+	varying vec3 v_color;
+	//varying vec3 fragColor;	//CHANGE ALL V_COLOR TO THIS LATER
+	varying vec3 fakenormal;
+	varying vec3 v_surfaceToLight;
+	varying vec3 v_surfaceToView;
+	varying vec3 v_spot_surfaceToLight;
+	void main()
+	{
+		float ambient = 0.15;
+		//NORMALIZE ON FRAGMENT SHADER NOT VERTEX SHADER 
+		//directional light
+		float d_light = dot(normalize(fakenormal), normalize(vec3(0.0,0.0,5.0)));	//light position hard coded here (doesn't need to be)
+		if(d_light<0.0)
+		{
+			d_light = 0.0;
+		}
+		//gl_FragColor = vec4(v_color*(ambient+d_light),1);
+		
+		//point light
+		float p_light = dot(normalize(fakenormal), normalize(v_surfaceToLight))*1.0/length(v_surfaceToLight);	//10.0 is intensity (can change this accordingly)
+		if(p_light <0.0)
+		{
+			p_light = 0.0;
+		}
+		//gl_FragColor = vec4(v_color*(p_light+d_light+ambient),1);
+		
+		//spot light
+		float spot_light_power;
+		float spot_light = dot(normalize(v_spot_surfaceToLight), vec3(1,0,0));
+		if(spot_light>=0.98)
+		{
+			spot_light_power = dot(normalize(fakenormal),normalize(v_spot_surfaceToLight));
+			if(spot_light_power<0.0)
+			{
+				spot_light_power = 0.0;
+			}
+		}
+		gl_FragColor = vec4(v_color*(spot_light_power/*+p_light+d_light+ambient*/),1);
+	}
+</script>
+
+<script>
+	class InitWebGLProgram
+	{
+		constructor()
+		{
+			gl.viewport(0,0, gl.canvas.width, gl.canvas.height);
+			gl.clearColor(1,1,1,1);
+			gl.clear(gl.COLOR_BUFFER_BIT);
+			gl.enable(gl.DEPTH_TEST);	
+		}
+		createShader(type,source)
+		{
+			var shader = gl.createShader(type);
+			gl.shaderSource(shader,source);
+			gl.compileShader(shader);
+			var success = gl.getShaderParameter(shader,gl.COMPILE_STATUS);
+			if(success)
+			{
+				return shader;
+			}
+			console.error(gl.getShaderInfoLog(shader));
+			gl.deleteShader(shader);
+		}
+		createProgram(vs,fs)
+		{
+			var program = gl.createProgram();
+			gl.attachShader(program,vs);
+			gl.attachShader(program,fs);
+			gl.linkProgram(program);
+			var succsess = gl.getProgramParameter(program,gl.LINK_STATUS);
+			if(succsess)
+			{
+				return program;
+			}
+			console.error(gl.getProgramInfoLog(program));
+			gl.deleteProgram(program);
+		}
+	}
+</script>
+
+<script>
+	class Transform
+	{
+		constructor()
+		{
+			this.forward = [0,0,1];
+			this.right = [1,0,0];
+			this.up = [0,1,0];
+		}
+		doRotations(RotAngles)
+		{
+			this.xRot = 
+			[
+				[1,0,0,0],
+				[0,Math.cos(RotAngles[0]),-1*Math.sin(RotAngles[0]),0],
+				[0,Math.sin(RotAngles[0]),Math.cos(RotAngles[0]),0],
+				[0,0,0,1]
+			];		
+			this.yRot =
+			[
+				[Math.cos(RotAngles[1]),0,Math.sin(RotAngles[1]),0],
+				[0,1,0,0],
+				[-1*Math.sin(RotAngles[1]),0,Math.cos(RotAngles[1]),0],
+				[0,0,0,1]	
+			];
+			this.zRot = 
+			[
+				[Math.cos(RotAngles[2]),-1*Math.sin(RotAngles[2]),0,0],
+				[Math.sin(RotAngles[2]),Math.cos(RotAngles[2]),0,0],
+				[0,0,1,0],
+				[0,0,0,1]
+			]	
+			this.forward = 	this.crossMultiply(this.zRot,
+							this.crossMultiply(this.yRot,
+							this.crossMultiply(this.xRot,[0,0,1,0])))
+							
+			this.right = 	this.crossMultiply(this.zRot,
+							this.crossMultiply(this.yRot,
+							this.crossMultiply(this.xRot,[1,0,0,0])))
+							
+			this.up = 		this.crossMultiply(this.zRot,
+							this.crossMultiply(this.yRot,
+							this.crossMultiply(this.xRot,[0,1,0,0])))
+		}			
+		crossMultiply(M,V)
+		{
+			//console.log(M[0][3]);
+			//console.log(V[3]);
+			var temp = [
+						M[0][0]*V[0]+M[0][1]*V[1]+M[0][2] * V[2]+ M[0][3]*V[3],
+						M[1][0]*V[0]+M[1][1]*V[1]+M[1][2] * V[2]+ M[1][3]*V[3],
+						M[2][0]*V[0]+M[2][1]*V[1]+M[2][2] * V[2]+ M[2][3]*V[3],
+						M[3][0]*V[0]+M[3][1]*V[1]+M[3][2] * V[2]+ M[3][3]*V[3]
+						]
+			//console.log(temp);
+			return temp;
+		}			
+	}
+		
+	class GameObject
+	{
+		constructor() 
+		{
+			this.loc = [0,0,0];
+			this.rot = [0,0,0];
+			this.isTrigger = false;
+			this.collisionRadius = 1.0;
+			this.velocity = [0,0,0];
+			this.angVelocity = [0,0,0];
+			this.name = "default";
+			this.id = 0;
+			this.prefab;
+			this.transform = new Transform();
+		}
+		move()
+		{
+			var tempP = [0,0,0]
+			for(var i=0; i<3; i++)
+			{
+				tempP[i] = this.loc[i];
+				tempP[i] += this.velocity[i];
+				this.rot[i] += this.angVelocity[i];
+			}
+			if(!this.isTrigger)
+			{
+				var clear = true;
+				for(var so in _main.solid)
+				{
+					if(_main.solid[so] != this)
+					{
+						if(_main.checkCollision(tempP,this.collisionRadius,_main.solid[so].loc,_main.solid[so].collisionRadius))
+						{
+							this.onCollision(_main.solid[so])
+							clear = false;
+						}
+					}
+				} 
+				if(clear)
+				{
+				//console.log("Should be moving "+tempP)
+				this.loc = tempP;
+				}
+			}
+			else
+			{
+				this.loc = tempP;
+			}
+			for(var tr in _main.trigger)
+			{
+				if(_main.trigger[tr] != this && this.id != 'ID0')
+				{
+					if(_main.checkCollision(tempP,this.collisionRadius,_main.trigger[tr].loc,_main.trigger[tr].collisionRadius))
+					{
+						this.onTrigger(_main.trigger[tr])
+						clear = false;
+					}
+				}
+			} 
+		}
+		onCollision(other)
+		{
+			//overwrite this to insert code to handle on collision
+			other.velocity = [0,0,0];
+		}
+		onTrigger(other)
+		{
+			//overwrite this to insert code to handle trigger collisions.
+			console.log(this);
+			this.hp--;
+			_main.destroyObject(other.id);
+		}
+		update()
+		{
+			console.error(this.name +" update() is NOT IMPLEMENTED!");
+		}
+		render(program, vertexCount, renderStyle)
+		{	
+			gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
+			var positionAttributeLocation = gl.getAttribLocation(program, "a_position");
+			var size = 3;          
+			var type = gl.FLOAT;   
+			var normalize = false; 
+			var stride = 6*Float32Array.BYTES_PER_ELEMENT;	
+			var offset = 0;
+			gl.enableVertexAttribArray(positionAttributeLocation);
+			gl.vertexAttribPointer(positionAttributeLocation, size, type, normalize, stride, offset);
+			var colorAttributeLocation = gl.getAttribLocation(program,"a_color");
+			size = 3;
+			type = gl.FLOAT;
+			normalize = false;
+			stride = 6*Float32Array.BYTES_PER_ELEMENT;	
+			offset = 3*Float32Array.BYTES_PER_ELEMENT;	
+			gl.enableVertexAttribArray(colorAttributeLocation);
+			gl.vertexAttribPointer(colorAttributeLocation, size, type, normalize, stride, offset);
+			var tranLoc  = gl.getUniformLocation(program,'u_translation');
+			gl.uniform3fv(tranLoc,new Float32Array(this.loc));
+			var thetaLoc = gl.getUniformLocation(program,'u_rotation');
+			gl.uniform3fv(thetaLoc,new Float32Array(this.rot));
+			var scaleLoc = gl.getUniformLocation(program,'u_scale');
+			gl.uniform3fv(scaleLoc,new Float32Array(this.scale));
+			var primitiveType = renderStyle;
+			offset = 0;
+			var count = vertexCount;
+			gl.drawArrays(primitiveType, offset, count);
+		}	
+	}
+	
+	class Asteroid extends GameObject
+	{
+		constructor()
+		{
+			super();
+			this.buffer=gl.createBuffer();
+			gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
+			this.vertices = [	
+							0,0.75,0,0.2,0.1,0,
+							0.5,0,0.5,0.4,0.2,0,
+							0.5,0,-0.5,0.4,0.2,0,
+							
+							0,0.75,0,0.2,0.1,0,
+							0.5,0,-0.5,0.4,0.2,0,
+							-0.5,0,-0.5,0.4,0.2,0,
+							
+							0,0.75,0,0.2,0.1,0,
+							-0.5,0,-0.5,0.4,0.2,0,
+							-0.5,0,0.5,0.4,0.2,0,
+							
+							0,0.75,0,0.2,0.1,0,
+							-0.5,0,0.5,0.4,0.2,0,
+							0.5,0,0.5,0.4,0.2,0,
+							
+							0,-0.75,0,0.2,0.1,0,
+							0.5,0,0.5,0.4,0.2,0,
+							0.5,0,-0.5,0.4,0.2,0,
+							
+							0,-0.75,0,0.2,0.1,0,
+							0.5,0,-0.5,0.4,0.2,0,
+							-0.5,0,-0.5,0.4,0.2,0,
+							
+							0,-0.75,0,0.2,0.1,0,
+							-0.5,0,-0.5,0.4,0.2,0,
+							-0.5,0,0.5,0.4,0.2,0,
+							
+							0,-0.75,0,0.2,0.1,0,
+							-0.5,0,0.5,0.4,0.2,0,
+							0.5,0,0.5,0.4,0.2,0
+							];
+			gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(this.vertices), gl.STATIC_DRAW);
+			this.loc = [0.0,0.0,0.0];
+			this.rot = [0.0,0.0,0.0];
+			this.angVelocity = [Math.random()*0.04+.01,Math.random()*0.04+.01,Math.random()*0.04+.01];
+			var randScale = Math.random()*0.8+0.2;
+			this.collisionRadius = 0.5*randScale;
+			this.scale = [randScale,randScale,randScale];
+			this.hp = 3;
+		}
+		update()
+		{
+			if (this.hp <= 0)
+			{
+				_main.destroyObject(this.id);
+			}
+			this.move()
+		}
+		render(program)
+		{	
+			var vertexCount = 24;
+			var renderStyle = gl.TRIANGLES;
+			super.render(program, vertexCount, renderStyle);
+		}
+	}
+	
+	class Projectile extends GameObject
+	{
+		constructor()
+		{
+			super();
+			this.buffer=gl.createBuffer();
+			gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
+			this.vertices = [	
+							0,0.75,0,0.6,0.6,0.6,
+							0.5,0,0.5,0.6,0.6,0.6,
+							0.5,0,-0.5,0.6,0.6,0.6,
+							
+							0,0.75,0,0.6,0.6,0.6,
+							0.5,0,-0.5,0.6,0.6,0.6,
+							-0.5,0,-0.5,0.6,0.6,0.6,
+							
+							0,0.75,0,0.6,0.6,0.6,
+							-0.5,0,-0.5,0.6,0.6,0.6,
+							-0.5,0,0.5,0.6,0.6,0.6,
+							
+							0,0.75,0,0.6,0.6,0.6,
+							-0.5,0,0.5,0.6,0.6,0.6,
+							0.5,0,0.5,0.6,0.6,0.6,
+							
+							0,-0.75,0,0.6,0.6,0.6,
+							0.5,0,0.5,0.6,0.6,0.6,
+							0.5,0,-0.5,0.6,0.6,0.6,
+							
+							0,-0.75,0,0.6,0.6,0.6,
+							0.5,0,-0.5,0.6,0.6,0.6,
+							-0.5,0,-0.5,0.6,0.6,0.6,
+							
+							0,-0.75,0,0.6,0.6,0.6,
+							-0.5,0,-0.5,0.6,0.6,0.6,
+							-0.5,0,0.5,0.6,0.6,0.6,
+							
+							0,-0.75,0,0.6,0.6,0.6,
+							-0.5,0,0.5,0.6,0.6,0.6,
+							0.5,0,0.5,0.6,0.6,0.6
+							];
+			gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(this.vertices), gl.STATIC_DRAW);
+			this.loc = [0.0,0.0,0.0];
+			this.rot = [0.0,0.0,0.0];
+			this.collisionRadius = 0.05;
+			this.scale = [0.05,0.05,0.05];
+		}
+		update()
+		{
+			this.move()
+		}
+		render(program)
+		{	
+			var vertexCount = 24;
+			var renderStyle = gl.TRIANGLES;
+			super.render(program, vertexCount, renderStyle);
+		}
+	}
+
+	class Camera extends GameObject
+	{
+		constructor()
+		{
+			super();
+			this.collisionRadius = 0.3;
+			this.canFire = true;
+		}
+		update()
+		{
+			//Inverse rotation here!
+			this.transform.doRotations(this.rot)
+			if(_main.checkKey("A"))
+			{
+				this.rot[1] -=.03;
+			}
+			if(_main.checkKey("D"))
+			{
+				this.rot[1] +=.03;
+			}
+			this.velocity = [0,0,0];
+			if(_main.checkKey("W"))
+			{
+				for(let i =0; i <3; i ++)
+				{
+					this.velocity[i] = this.transform.forward[i]*.1
+				}
+			}
+			if(_main.checkKey("S"))
+			{
+				for(let i =0; i <3; i ++)
+				{
+					this.velocity[i] = this.transform.forward[i]*-.1
+				}
+			}
+			if(_main.checkKey("Z") || _main.checkKey(" "))
+			{
+				this.velocity[1] += 0.1;
+			}
+			if(_main.checkKey("X") || _main.checkKey(""))
+			{
+				this.velocity[1] -= 0.1;
+			}
+			if(_main.checkKey("") && _main.keys["W"])
+			{
+				for(let i =0; i <3; i ++)
+				{
+					this.velocity[i] = this.transform.forward[i]*.25;
+				}
+			}
+			if(_main.checkKey("E") && this.canFire == true)
+			{
+				var temp = _main.createObject(2, Projectile, [this.loc[0], this.loc[1], this.loc[2]], [0,0,0]);
+				for(let i=0; i<3; i++)
+				{
+					temp.velocity[i] = this.transform.forward[i]*0.5;
+				}
+				this.canFire = false;
+			}
+			this.move()
+		}
+		render(program)
+		{
+			var camLoc  = gl.getUniformLocation(program,'cameraLoc');
+			gl.uniform3fv(camLoc,new Float32Array(this.loc));
+			var worldLoc = gl.getUniformLocation(program,'cameraRotation');
+			gl.uniform3fv(worldLoc,new Float32Array(this.rot));
+		}
+		static updateFire(newFire)
+		{
+			this.canFire = newFire;
+		}
+	}
+
+	class Main
+	{
+		constructor()
+		{
+			this.webGL = new InitWebGLProgram();
+			var vertexShaderSource = document.getElementById("2dVertexShader").text;
+			var fragmentShaderSource = document.getElementById("2dFragmentShader").text;
+			var vertexShader = this.webGL.createShader(gl.VERTEX_SHADER, vertexShaderSource);
+			var fragmentShader = this.webGL.createShader(gl.FRAGMENT_SHADER, fragmentShaderSource);
+			this.program = this.webGL.createProgram(vertexShader,fragmentShader);
+			gl.useProgram(this.program);
+			requestAnimationFrame(Main.mainLoop);
+			this.ObjectCounter = 0;
+			this.visual = [];
+			this.solid = [];
+			this.trigger = [];
+			this.keys =[];
+			
+			//Added for Camera move!
+			var camLoc  = gl.getUniformLocation(this.program,'cameraLoc');
+			gl.uniform3fv(camLoc,new Float32Array([0,0,0]));
+			var worldLoc = gl.getUniformLocation(this.program,'cameraRotation');
+			gl.uniform3fv(worldLoc,new Float32Array([0,0,0]));
+			
+			var tempLoc = gl.getUniformLocation(this.program,'n');
+			gl.uniform1f(tempLoc,.1);
+			tempLoc = gl.getUniformLocation(this.program,'f');
+			gl.uniform1f(tempLoc,500);
+			tempLoc = gl.getUniformLocation(this.program,'r');
+			gl.uniform1f(tempLoc,.1);
+			tempLoc = gl.getUniformLocation(this.program,'t');
+			gl.uniform1f(tempLoc,.1);
+		}
+		updateAll()
+		{
+			for(var i in this.visual)
+			{
+				this.visual[i].update();
+			}
+			for(var i in this.solid)
+			{
+				this.solid[i].update();
+			}
+			for(var i in this.trigger)
+			{
+				this.trigger[i].update();
+			}
+		}
+		renderAll()
+		{
+			for(var i in this.visual)
+			{
+				this.visual[i].render(this.program);
+			}
+			for(var i in this.solid)
+			{
+				this.solid[i].render(this.program);
+			}
+			for(var i in this.trigger)
+			{
+				this.trigger[i].render(this.program);
+			}
+		}
+		keyDown(event)
+		{
+			event.preventDefault();
+			this.keys[String.fromCharCode(event.keyCode)] = true;
+			console.log(String.fromCharCode(event.keyCode) +" should be true - "+this.keys[String.fromCharCode(event.keyCode)]);
+		}
+		keyUp(event)
+		{
+			if(String.fromCharCode(event.keyCode) == "E")
+			{
+				_main.visual["ID0"].canFire = true;
+			}
+				
+			this.keys[String.fromCharCode(event.keyCode)] = false;
+			console.log(String.fromCharCode(event.keyCode) +" should be false - "+this.keys[String.fromCharCode(event.keyCode)]);
+		}		
+		static keyD(event)
+		{
+			_main.keyDown(event);
+		}
+		static keyU(event)
+		{
+			_main.keyUp(event);
+		}		
+		static mainLoop()
+		{
+			_main.updateAll();
+			_main.renderAll();
+			requestAnimationFrame(Main.mainLoop);
+		}
+					
+		//Added For Game Engine (Sphere collider)
+		checkCollision(loc1,rad1,loc2, rad2)
+		{
+			if (Math.sqrt(Math.pow(loc1[0]-loc2[0], 2)+Math.pow(loc1[1]-loc2[1], 2)+Math.pow(loc1[2]-loc2[2], 2)) <= rad1+rad2)
+				{
+					return true;
+				}
+				return false;
+		}
+		
+		createObject(type, prefab, loc, rot)
+		{
+			//type 0 = visual
+			//type 1 = solid
+			//type 2 = trigger
+			var temp = new prefab;
+			var id = "ID"+this.ObjectCounter;
+			this.ObjectCounter ++;
+			temp.id = id;
+			temp.prefab = prefab;
+			for(let i =0; i < 3; i ++)
+			{
+				temp.loc[i] = loc[i];
+				temp.rot[i] = rot[i];
+			}
+			switch(type)
+			{
+				case 0:
+					this.visual[id] = temp;
+				break;
+				case 1:
+					this.solid[id] = temp;
+				break;
+				case 2:
+					this.trigger[id] = temp;
+					temp.isTrigger = true;
+			}		
+			return temp;
+		}
+		destroyObject(id)
+		{
+			if(id in this.visual)
+			{
+				delete this.visual[id];
+				return true
+			}
+			if(id in this.solid)
+			{
+				delete this.solid[id];
+				return true
+			}
+		
+			if(id in this.trigger)
+			{
+				delete this.trigger[id];
+				return true
+			}
+			return false
+		}
+		checkKey(key)
+		{
+			if( (key in this.keys)&& this.keys[key])
+			{
+				return true
+			}
+			else
+			{
+				return false
+			}
+		}
+	}
+</SCRIPT>
+</HEAD>
+
+	<BODY>
+		<CANVAS id="myCanvas" width="640" height="640" style = "border: 4px solid #AAA; background-color: black;">Your browser does not support canvas.</CANVAS>
+		<SECTION>
+			<H2>Controls:</H2>
+			Turn Left ("A")<br>
+			Turn Right ("D")<br>
+			Move Forward ("W")<br>
+			Move Backward ("S")<br>
+			Move Up ("Z" or "Spacebar")<br>
+			Move Down ("X" or "Left Control")<br>
+			Speed Up ("Left Shift")<br>
+			Fire Projectile ("Mouse Left Click")<br>
+		</SECTION>
+	<SCRIPT>
+	var canvas = document.getElementById("myCanvas");
+	var gl = canvas.getContext("webgl2");
+	_main = new Main()
+	canvas.addEventListener("click",Main.mouseH);
+	canvas.addEventListener("mousemove",Main.mouseM);
+	window.onkeydown = Main.keyD;
+	window.onkeyup = Main.keyU;
+	_main.createObject(0,Camera,[0,0,1],[0,0,0])
+	for(let i=0; i<200; i++)
+	{
+		do{
+			var xRand = Math.random()*200-100;
+			var yRand = Math.random()*20-10;
+			var zRand = Math.random()*200-100;
+		}while((xRand<2 && xRand>-2) || (zRand<3 && zRand>-1));
+		_main.createObject(1,Asteroid,[xRand,yRand,zRand],[0,0,0])
+	}
+	</SCRIPT>
+	</BODY>
+</HTML>
